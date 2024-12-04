@@ -2,87 +2,75 @@ from kubernetes import client, config, watch
 import yaml
 import os
 
+# OpenAPI Template and Generated File
 OPENAPI_TEMPLATE = "openapi_template.yaml"
 UPDATED_OPENAPI = "updated_openapi.yaml"
 
-def load_kube_config():
-    """Load Kubernetes configuration."""
-    config.load_kube_config()
+# Kubernetes Configuration
+config.load_incluster_config()
+v1 = client.CoreV1Api()
 
 def fetch_services():
-    """Fetch all services in the cluster."""
-    v1 = client.CoreV1Api()
-    services = v1.list_service_for_all_namespaces()
-    return services.items
+    """Fetch all Kubernetes services."""
+    return v1.list_service_for_all_namespaces()
 
 def generate_openapi_spec(services):
-    """Generate an updated OpenAPI spec based on services."""
-    # Load the OpenAPI template
+    """Generate OpenAPI spec from service list."""
+    # Load base OpenAPI template
     with open(OPENAPI_TEMPLATE, "r") as file:
         openapi_spec = yaml.safe_load(file)
 
     # Clear existing paths
     openapi_spec["paths"] = {}
 
-    # Add new paths dynamically
-    for service in services:
-        name = service.metadata.name
-        namespace = service.metadata.namespace
-        ip = service.spec.cluster_ip or service.status.load_balancer.ingress[0].ip
-        port = service.spec.ports[0].port if service.spec.ports else 80
+    for svc in services.items:
+        name = svc.metadata.name
+        namespace = svc.metadata.namespace
+        cluster_ip = svc.spec.cluster_ip or svc.status.load_balancer.ingress[0].ip
+        port = svc.spec.ports[0].port if svc.spec.ports else 80
 
-        service_url = f"http://{ip}:{port}"
+        service_url = f"http://{cluster_ip}:{port}"
         openapi_spec["paths"][f"/{name}"] = {
             "get": {
-                "x-google-backend": {
-                    "address": service_url
-                },
-                "responses": {
-                    "200": {
-                        "description": f"Successful response from {name}"
-                    }
-                }
+                "x-google-backend": {"address": service_url},
+                "responses": {"200": {"description": f"Response from {name}"}},
             }
         }
 
-    # Save updated OpenAPI spec
+    # Save the updated OpenAPI spec
     with open(UPDATED_OPENAPI, "w") as file:
         yaml.dump(openapi_spec, file)
 
     return UPDATED_OPENAPI
 
 def update_api_gateway():
-    """Update the API Gateway with the new OpenAPI spec."""
-    # Replace with your API Gateway configuration
+    """Update API Gateway with new configuration."""
     api_id = "your-api-id"
     gateway_id = "your-gateway-id"
     region = "your-region"
 
-    # Create a new API config
+    # Create new API config
     os.system(f"gcloud api-gateway api-configs create new-config \
                 --api={api_id} \
                 --openapi-spec={UPDATED_OPENAPI} \
                 --project=$(gcloud config get-value project)")
 
-    # Deploy the new API config to the gateway
+    # Deploy config to gateway
     os.system(f"gcloud api-gateway gateways update {gateway_id} \
                 --api-config=new-config \
                 --location={region} \
                 --project=$(gcloud config get-value project)")
 
 def watch_services():
-    """Watch for service changes and update API Gateway."""
-    v1 = client.CoreV1Api()
+    """Watch Kubernetes service events and update API Gateway."""
     watcher = watch.Watch()
-
     for event in watcher.stream(v1.list_service_for_all_namespaces):
-        service = event["object"]
-        if event["type"] in ["ADDED", "DELETED", "MODIFIED"]:
-            print(f"Service {service.metadata.name} {event['type']}")
+        svc = event["object"]
+        if event["type"] in ["ADDED", "DELETED"]:
+            print(f"Service {svc.metadata.name} {event['type']}")
             services = fetch_services()
             generate_openapi_spec(services)
             update_api_gateway()
 
 if __name__ == "__main__":
-    load_kube_config()
     watch_services()
