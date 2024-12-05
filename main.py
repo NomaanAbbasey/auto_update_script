@@ -3,8 +3,10 @@ import json
 import logging
 import os
 from flask import Flask, request, jsonify
+from flask_cors import CORS  # Import Flask-CORS
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # Store services in memory (can be replaced with a database)
 running_services = []
@@ -33,14 +35,19 @@ def handle_eventarc_event():
         event = json.loads(event_data)
 
         # Parse the event payload for Cloud Run service details
-        log_name = event.get("protoPayload", {}).get("serviceName", "")
+        log_name = event.get("protoPayload", {}).get("methodName", "")
         service_name = event.get("protoPayload", {}).get("resourceName", "")
 
+        # Log the parsed event details
+        logging.info(f"Parsed event - log_name: {log_name}, service_name: {service_name}")
+
         # Handle service creation and deletion
-        if "create" in log_name:
+        if "CreateService" in log_name:
             running_services.append(service_name)
-        elif "delete" in log_name and service_name in running_services:
+            logging.info(f"Service added: {service_name}")
+        elif "DeleteService" in log_name and service_name in running_services:
             running_services.remove(service_name)
+            logging.info(f"Service removed: {service_name}")
 
         return "Event processed", 200
     except Exception as e:
